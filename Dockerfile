@@ -1,87 +1,157 @@
 ARG DEBIAN_VERSION=bullseye
 ARG PYTHON_VERSION=3.8
 
-FROM python:${PYTHON_VERSION}-${DEBIAN_VERSION}
-LABEL GeoNode development team
+ARG GEONODE_UID=830
+ARG GEONODE_GID=${GEONODE_UID}
+ARG GEONODE_HOME=/var/lib/geonode
+ARG GEONODE_PROJECT_NAME=geonode_project
 
-RUN mkdir -p /usr/src/geonode_project
+# Multi-Stage build + Virtualenv
+FROM python:${PYTHON_VERSION}-${DEBIAN_VERSION} AS BUILDER
 
-# Enable postgresql-client-13
-# RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ buster-pgdg main" | tee /etc/apt/sources.list.d/pgdg.list
-# RUN echo "deb http://deb.debian.org/debian/ stable main contrib non-free" | tee /etc/apt/sources.list.d/debian.list
-# RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+ARG GEONODE_HOME
+ARG GEONODE_PROJECT_NAME
 
-# To get GDAL 3.2.1 to fix this issue https://github.com/OSGeo/gdal/issues/1692
-# TODO: The following line should be removed if base image upgraded to Bullseye
-# RUN echo "deb http://deb.debian.org/debian/ bullseye main contrib non-free" | tee /etc/apt/sources.list.d/debian.list
+WORKDIR ${GEONODE_HOME}
 
-# This section is borrowed from the official Django image but adds GDAL and others
-RUN apt-get update -y && apt-get upgrade -y
+# Install apt dependencies
+RUN apt-get -y update && \
+    apt-get install -y \
+        # builders
+        devscripts \
+        build-essential \
+        debhelper \
+        pkg-kde-tools \
+        sharutils \
+        # devels
+        libgdal-dev \
+        libpq-dev \
+        libxml2-dev \
+        libxslt1-dev \
+        zlib1g-dev \
+        libjpeg-dev \
+        libmemcached-dev \
+        libffi-dev \
+        # geonode-ldap
+        libldap2-dev \
+        libsasl2-dev && \
+    apt-get -y autoremove && \
+    rm -rf /var/lib/apt/lists/*
 
-# Prepraing dependencies
-RUN apt-get install -y \
-    libgdal-dev libpq-dev libxml2-dev \
-    libxml2 libxslt1-dev zlib1g-dev libjpeg-dev \
-    libmemcached-dev libldap2-dev libsasl2-dev libffi-dev
+# create virutalenv
+RUN set -xe && \
+    python -m venv --symlinks venv && \
+    # upgrade basics
+    venv/bin/python -m pip install --upgrade \
+        wheel
 
-RUN apt-get install -y --no-install-recommends \
-    gcc zip gettext geoip-bin cron \
-    postgresql-client-13 \
-    sqlite3 spatialite-bin libsqlite3-mod-spatialite \
-    python3-dev python3-gdal python3-psycopg2 python3-ldap \
-    python3-pip python3-pil python3-lxml python3-pylibmc \
-    uwsgi uwsgi-plugin-python3 \
-    firefox-esr
+# copy only requirements
+COPY src/requirements.txt /tmp
 
-RUN apt-get install -y devscripts build-essential debhelper pkg-kde-tools sharutils
-# RUN git clone https://salsa.debian.org/debian-gis-team/proj.git /tmp/proj
-# RUN cd /tmp/proj && debuild -i -us -uc -b && dpkg -i ../*.deb
+# install geonode project
+RUN set -xe && \
+    # extra deps
+    venv/bin/python -m pip install \
+        pygdal==$(gdal-config --version).* \
+        flower==0.9.4 && \
+    venv/bin/python -m pip install \
+        pylibmc \
+        sherlock && \
+    # geonode base (requirements.txt)
+    venv/bin/python -m pip install --upgrade -r /tmp/requirements.txt && \
+    # geonode contribs (installed after geonode, because geonode-ldap was installing the latest geonode version, then downgrade to requirements' version)
+    venv/bin/python -m pip install \
+        "git+https://github.com/GeoNode/geonode-contribs.git#egg=geonode-logstash&subdirectory=geonode-logstash" && \
+    venv/bin/python -m pip install \
+        "git+https://github.com/GeoNode/geonode-contribs.git#egg=geonode-ldap&subdirectory=ldap" && \
+    # clean pip cache
+    venv/bin/python -m pip cache purge && \    
+    echo "Checking Virtualenv: $(venv/bin/python -m pip check)"
 
-# Install pip packages
-RUN pip install pip --upgrade \
-    && pip install pygdal==$(gdal-config --version).* \
-        flower==0.9.4
+# RUN venv/bin/python -m pip freeze | grep -i geonode && sleep 10000
 
-# Activate "memcached"
-RUN apt install -y memcached
-RUN pip install pylibmc \
-    && pip install sherlock
+ARG DEBIAN_VERSION
+ARG PYTHON_VERSION
 
-# add bower and grunt command
-COPY src /usr/src/geonode_project/
-WORKDIR /usr/src/geonode_project
+# Release version
+FROM python:${PYTHON_VERSION}-slim-${DEBIAN_VERSION} AS RELEASE
 
-COPY src/monitoring-cron /etc/cron.d/monitoring-cron
-RUN chmod 0644 /etc/cron.d/monitoring-cron
-RUN crontab /etc/cron.d/monitoring-cron
-RUN touch /var/log/cron.log
-RUN service cron start
+ARG GEONODE_UID
+ARG GEONODE_GID
+ARG GEONODE_HOME
+ARG GEONODE_PROJECT_NAME
 
-COPY src/wait-for-databases.sh /usr/bin/wait-for-databases
-RUN chmod +x /usr/bin/wait-for-databases
-RUN chmod +x /usr/src/geonode_project/tasks.py \
-    && chmod +x /usr/src/geonode_project/entrypoint.sh
+LABEL maintainer="NDS CPRM"
 
-COPY src/celery.sh /usr/bin/celery-commands
-RUN chmod +x /usr/bin/celery-commands
+RUN apt-get -y update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        zip gettext geoip-bin cron curl \
+        postgresql-client-13 memcached \
+        sqlite3 spatialite-bin libsqlite3-mod-spatialite \
+        libgdal28 libmemcached11 libxslt1.1 \
+        gosu cowsay \
+        # geonode-ldap
+        libldap-2.4-2 \
+        libsasl2-2 && \
+        # git firefox-esr && \
+    ln -s /usr/games/cowsay /usr/bin/cowsay && \
+    apt-get -y autoremove && \
+    rm -rf /var/lib/apt/lists/*
 
-COPY src/celery-cmd /usr/bin/celery-cmd
-RUN chmod +x /usr/bin/celery-cmd
+# Create a geonode user and put shell to load the geonode virtualenv
+RUN groupadd -g ${GEONODE_UID} geonode && \
+    useradd -g ${GEONODE_GID} -u ${GEONODE_UID} -m -d ${GEONODE_HOME} -s /usr/sbin/nologin geonode && \
+    # geonode dirs (logs, statics)
+    mkdir -p /mnt/volumes/statics && \
+    ln -s /mnt/volumes/statics ${GEONODE_HOME}/statics && \
+    # add geonode virtualenv to root and geonode user
+    printf "\n# GeoNode VirtualEnv\nalias activate='source %s/venv/bin/activate'\n" ${GEONODE_HOME} | tee -a ~/.bashrc >> ${GEONODE_HOME}/.bashrc && \ 
+    echo "printf \"Welcome to GeoNode! Type \'activate\' on shell to initialize the VirtualEnv\" | cowsay -f tux" | tee -a ~/.bashrc >> ${GEONODE_HOME}/.bashrc && \
+    # grant content to user geonode
+    chown -R geonode:geonode /mnt/volumes/statics ${GEONODE_HOME}/statics ${GEONODE_HOME}/.bashrc    
 
-# Install "geonode-contribs" apps
-RUN cd /usr/src; git clone https://github.com/GeoNode/geonode-contribs.git -b master
-# Install logstash and centralized dashboard dependencies
-RUN cd /usr/src/geonode-contribs/geonode-logstash; pip install --upgrade  -e . \
-    cd /usr/src/geonode-contribs/ldap; pip install --upgrade  -e .
+# Copy virtualenv made in BUILDER
+COPY --from=BUILDER ${GEONODE_HOME}/venv ${GEONODE_HOME}/venv
 
-RUN pip install --upgrade --no-cache-dir  --src /usr/src -r requirements.txt
-RUN pip install --upgrade  -e .
+# Copy geonode_project source code
+COPY src ${GEONODE_HOME}/venv/src/${GEONODE_PROJECT_NAME}
 
-# Cleanup apt update lists
-RUN rm -rf /var/lib/apt/lists/*
+WORKDIR ${GEONODE_HOME}  
+
+ENV GEONODE_HOME=${GEONODE_HOME} \
+    GEONODE_PROJECT_NAME=${GEONODE_PROJECT_NAME}
+
+# Install and configure GeoNode Project on RELEASE
+RUN set -xe && \
+    # install geonode project (setup.py)
+    venv/bin/python -m pip install --upgrade -e venv/src/${GEONODE_PROJECT_NAME} && \
+    venv/bin/python -m pip cache purge && \    
+    echo "Checking Virtualenv: $(venv/bin/python -m pip check)" && \
+    # configure uWSGI and celery scripts    
+    chmod +x venv/src/${GEONODE_PROJECT_NAME}/celery.sh \
+        venv/src/${GEONODE_PROJECT_NAME}/celery-cmd \
+        venv/src/${GEONODE_PROJECT_NAME}/uwsgi-cmd && \
+    ln -s $(pwd)/venv/src/${GEONODE_PROJECT_NAME}/celery.sh /usr/bin/celery-commands && \
+    ln -s $(pwd)/venv/src/${GEONODE_PROJECT_NAME}/celery-cmd /usr/bin/celery-cmd && \
+    ln -s $(pwd)/venv/src/${GEONODE_PROJECT_NAME}/uwsgi-cmd /usr/bin/uwsgi-cmd && \
+    # configure other scripts
+    chmod +x venv/src/${GEONODE_PROJECT_NAME}/wait-for-databases.sh \
+        venv/src/${GEONODE_PROJECT_NAME}/tasks.py \
+        venv/src/${GEONODE_PROJECT_NAME}/entrypoint.sh && \
+    ln -s $(pwd)/venv/src/${GEONODE_PROJECT_NAME}/wait-for-databases.sh /usr/bin/wait-for-databases
+
+# configure system scripts
+RUN set -xe && \
+    # cron jobs
+    mv venv/src/${GEONODE_PROJECT_NAME}/monitoring-cron /etc/cron.d/monitoring-cron && \
+    chmod 0644 /etc/cron.d/monitoring-cron && \
+    crontab /etc/cron.d/monitoring-cron && \
+    touch /var/log/cron.log && \
+    # entrypoint 
+    ln -s ${GEONODE_HOME}/venv/src/${GEONODE_PROJECT_NAME}/entrypoint.sh /entrypoint.sh
 
 # Export ports
 EXPOSE 8000
 
 # We provide no command or entrypoint as this image can be used to serve the django project or run celery tasks
-# ENTRYPOINT /usr/src/geonode_project/entrypoint.sh
+# ENTRYPOINT [ "/entrypoint.sh" ]

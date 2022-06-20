@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+# Execute uWSGI with dropped privileges
+# path to uwsgi.ini: ${GEONODE_HOME}/venv/src/${COMPOSE_PROJECT_NAME}geonode_project/uwsgi.ini
+uwsgi --uid=$(id -u geonode) --gid=$(id -g geonode) --ini /var/lib/geonode/venv/src/geonode_project/uwsgi.ini

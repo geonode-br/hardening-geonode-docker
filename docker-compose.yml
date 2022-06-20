@@ -33,8 +33,9 @@ services:
       start_period: 60s
     environment:
       - IS_CELERY=False
-    entrypoint: ["/usr/src/geonode_project/entrypoint.sh"]
-    command: "uwsgi --ini /usr/src/geonode_project/uwsgi.ini"
+    entrypoint: ["/entrypoint.sh"]
+    # command: "uwsgi --ini ${GEONODE_HOME}/venv/src/${COMPOSE_PROJECT_NAME}/uwsgi.ini" # GEONODE_HOME is the new env variable
+    command: "uwsgi-cmd"
 
   # Celery worker that executes celery tasks created by Django.
   celery:
@@ -45,7 +46,7 @@ services:
       - django
     environment:
       - IS_CELERY=True
-    entrypoint: ["/usr/src/geonode_project/entrypoint.sh"]
+    entrypoint: ["/entrypoint.sh"]
     command: "celery-cmd"
 
   # Nginx is serving django static and media files and proxies to django and geonode
@@ -103,6 +104,7 @@ services:
       - data:/data
       - tmp:/tmp
     restart: unless-stopped
+
   data-dir-conf:
     image: geonode/geoserver_data:2.19.x
     container_name: gsconf4${COMPOSE_PROJECT_NAME}

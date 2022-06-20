@@ -237,7 +237,7 @@ def fixtures(ctx):
 --settings={0}".format(_localsettings()), pty=True)
     ctx.run("python manage.py loaddata /tmp/default_site.json \
 --settings={0}".format(_localsettings()), pty=True)
-    ctx.run("python manage.py loaddata /usr/src/geonode_project/fixtures/initial_data.json \
+    ctx.run("python manage.py loaddata ./fixtures/initial_data.json \
 --settings={0}".format(_localsettings()), pty=True)
     ctx.run("python manage.py set_all_layers_alternate \
 --settings={0}".format(_localsettings()), pty=True)
