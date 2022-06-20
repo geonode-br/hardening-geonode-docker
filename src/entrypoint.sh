@@ -6,33 +6,33 @@ set -e
 # exec all in the default virtualenv (edit .bashrc to enable alias in non-interactive mode)
 source ${GEONODE_HOME}/venv/bin/activate
 
+INVOKE_LOG_STDOUT=${INVOKE_LOG_STDOUT:-FALSE}
+INVOKE_LOG_FILE=/var/log/geonode-invoke.log
+
+invoke () {
+    if [ $INVOKE_LOG_STDOUT = 'true' ] || [ $INVOKE_LOG_STDOUT = 'True' ]
+    then
+        ${GEONODE_HOME}/venv/bin/invoke $@
+    else
+        ${GEONODE_HOME}/venv/bin/invoke $@ >> ${INVOKE_LOG_FILE} 2>&1
+    fi
+    echo "$@ tasks done"
+}
+
+# Start cron && memcached services
+service cron restart
+service memcached restart
+
+# subprocessing to GeoNode SRC
+echo $"\n\n\n"
+echo "-----------------------------------------------------"
+echo "STARTING DJANGO ENTRYPOINT $(date)"
+echo "-----------------------------------------------------"
+
 cmd="$@"
 
-# subshell in GeoNode SRC
 (
-    cd ${GEONODE_HOME}/venv/src/${GEONODE_PROJECT_NAME}
-
-    INVOKE_LOG_STDOUT=${INVOKE_LOG_STDOUT:-FALSE}
-    INVOKE_LOG_FILE=/var/log/geonode-invoke.log
-
-    invoke () {
-        if [ $INVOKE_LOG_STDOUT = 'true' ] || [ $INVOKE_LOG_STDOUT = 'True' ]
-        then
-            ${GEONODE_HOME}/venv/bin/invoke $cmd
-        else
-            ${GEONODE_HOME}/venv/bin/invoke $cmd >> ${INVOKE_LOG_FILE} 2>&1
-        fi
-        echo "$cmd tasks done"
-    }
-
-    # Start cron && memcached services
-    service cron restart
-    service memcached restart
-
-    echo $"\n\n\n"
-    echo "-----------------------------------------------------"
-    echo "STARTING DJANGO ENTRYPOINT $(date)"
-    echo "-----------------------------------------------------"
+    cd ${GEONODE_HOME}/venv/src/${GEONODE_PROJECT_NAME}    
 
     invoke update
 
